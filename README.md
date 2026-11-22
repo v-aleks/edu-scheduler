@@ -44,7 +44,7 @@ cargo run
 
 При первом запуске создаётся файл `schedule.db` в каталоге данных приложения:
 
-- macOS: `~/Library/Application Support/ru.v-aleks.edu-scheduler/schedule.db`
+- macOS: `~/Library/Application Support/ru.user.edu-scheduler/schedule.db`
 - Linux: `~/.local/share/edu-scheduler/schedule.db`
 
 Путь можно переопределить:
@@ -110,8 +110,6 @@ cargo test
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Edu Scheduler.app"
 ```
-
-Для Intel Mac можно собрать бинарник с `cargo build --release --target x86_64-apple-darwin`; скрипт упаковки использует текущую архитектуру.
 
 ### Linux
 
