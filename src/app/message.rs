@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 
 use crate::app::state::CalendarView;
-use crate::domain::model::{SlotId, SlotKind, TeacherId, Weekday};
+use crate::domain::model::{SlotId, SlotKind, SubjectId, TeacherId, Weekday};
 
 use super::state::TeacherFilter;
 
@@ -13,20 +13,35 @@ pub enum Message {
     SetView(CalendarView),
     ShowCalendar,
     ShowTeachers,
+    ShowSubjects,
     FilterSelected(TeacherFilter),
     OpenNewSlot,
     OpenSlot(SlotId),
+    SlotMoved {
+        id: SlotId,
+        weekday: Weekday,
+        start_minute: u16,
+    },
     OpenNewTeacher,
     EditTeacher(TeacherId),
     AskDeleteTeacher(TeacherId),
     DeleteTeacher(TeacherId),
+    OpenNewSubject,
+    EditSubject(SubjectId),
+    AskDeleteSubject(SubjectId),
+    DeleteSubject(SubjectId),
     CloseModal,
     DismissBanner,
     TeacherSearch(String),
+    SubjectSearch(String),
     SlotForm(SlotFormMessage),
     TeacherForm(TeacherFormMessage),
+    SubjectForm(SubjectFormMessage),
     WeekSlotClicked(SlotId),
-    WeekEmptyClicked { weekday: Weekday, minute: u16 },
+    WeekEmptyClicked {
+        weekday: Weekday,
+        minute: u16,
+    },
     MonthDaySelected(NaiveDate),
     RetryStartup,
     Quit,
@@ -54,9 +69,19 @@ pub enum SlotFormMessage {
 #[derive(Debug, Clone)]
 pub enum TeacherFormMessage {
     Name(String),
-    Subject(String),
     Note(String),
     Color(String),
+    ToggleSubject(SubjectId),
+    Save,
+    Cancel,
+    RequestDelete,
+    ConfirmDelete,
+    CancelDelete,
+}
+
+#[derive(Debug, Clone)]
+pub enum SubjectFormMessage {
+    Name(String),
     Save,
     Cancel,
     RequestDelete,

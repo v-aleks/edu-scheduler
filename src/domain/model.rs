@@ -2,12 +2,21 @@ use chrono::Datelike;
 
 pub type TeacherId = i64;
 pub type SlotId = i64;
+pub type SubjectId = i64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subject {
+    pub id: SubjectId,
+    pub name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Teacher {
     pub id: TeacherId,
     pub name: String,
-    pub subject: String,
+    pub subject_ids: Vec<SubjectId>,
     pub note: String,
     pub color: String,
     pub created_at: String,
@@ -224,6 +233,21 @@ mod tests {
         }
 
         assert_eq!(SlotKind::from_db("unknown"), None);
+    }
+
+    #[test]
+    fn teacher_keeps_subject_ids() {
+        let teacher = Teacher {
+            id: 1,
+            name: "Иванов".to_string(),
+            subject_ids: vec![3, 1],
+            note: String::new(),
+            color: "#2563EB".to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+
+        assert_eq!(teacher.subject_ids, vec![3, 1]);
     }
 
     #[test]

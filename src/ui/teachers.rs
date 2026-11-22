@@ -14,7 +14,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .filter(|teacher| {
             search.is_empty()
                 || teacher.name.to_lowercase().contains(&search)
-                || teacher.subject.to_lowercase().contains(&search)
+                || app
+                    .teacher_subject_names(teacher)
+                    .iter()
+                    .any(|subject| subject.to_lowercase().contains(&search))
         })
         .collect();
 
@@ -74,13 +77,14 @@ fn teacher_row<'a>(app: &'a App, teacher: &'a Teacher) -> Element<'a, Message> {
             ..container::Style::default()
         });
 
-    let subject: Element<'_, Message> = if teacher.subject.trim().is_empty() {
-        text("Предмет не указан")
+    let subject_names = app.teacher_subject_names(teacher);
+    let subject: Element<'_, Message> = if subject_names.is_empty() {
+        text("Предметы не указаны")
             .size(11)
             .color(theme::MUTED)
             .into()
     } else {
-        text(teacher.subject.clone())
+        text(subject_names.join(", "))
             .size(11)
             .color(theme::MUTED)
             .into()

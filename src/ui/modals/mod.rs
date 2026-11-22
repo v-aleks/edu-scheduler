@@ -2,6 +2,7 @@
 
 mod confirm;
 mod slot_editor;
+mod subject_editor;
 mod teacher_editor;
 
 use iced::widget::{center, container, mouse_area, opaque, stack};
@@ -13,7 +14,9 @@ pub fn view<'a>(app: &'a App, modal: &'a Modal) -> Element<'a, Message> {
     match modal {
         Modal::Slot(editor) => slot_editor::view(app, editor),
         Modal::Teacher(editor) => teacher_editor::view(app, editor),
+        Modal::Subject(editor) => subject_editor::view(editor),
         Modal::ConfirmDeleteTeacher(confirm) => confirm::view(confirm),
+        Modal::ConfirmDeleteSubject(confirm) => confirm::subject_view(confirm),
     }
 }
 

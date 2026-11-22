@@ -3,6 +3,7 @@
 pub mod calendar;
 mod modals;
 mod strings;
+mod subjects;
 mod teachers;
 mod theme;
 
@@ -19,6 +20,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let content: Element<'_, Message> = match app.screen {
         Screen::Calendar => calendar::view(app),
         Screen::Teachers => teachers::view(app),
+        Screen::Subjects => subjects::view(app),
     };
 
     let mut page = column![calendar::toolbar::view(app)]

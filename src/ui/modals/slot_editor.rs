@@ -120,11 +120,7 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
                     ..container::Style::default()
                 });
 
-            let label = if teacher.subject.trim().is_empty() {
-                teacher.display_name().to_string()
-            } else {
-                format!("{} · {}", teacher.display_name(), teacher.subject)
-            };
+            let label = app.teacher_label(teacher);
 
             teacher_rows = teacher_rows.push(
                 row![

@@ -4,8 +4,12 @@ use std::path::PathBuf;
 use chrono::{Local, NaiveDate};
 
 use crate::db::Database;
-use crate::domain::model::{Slot, SlotId, SlotKind, Teacher, TeacherId, Weekday};
-use crate::domain::validation::{SlotDraft, TeacherDraft};
+use crate::domain::model::{
+    Slot, SlotId, SlotKind, Subject, SubjectId, Teacher, TeacherId, Weekday,
+};
+use crate::domain::validation::{
+    SlotDraft, SubjectDraft, TeacherDraft, ValidatedSubject, validate_subject_draft,
+};
 use crate::domain::{week_dates, week_start};
 
 pub const TEACHER_COLORS: [&str; 10] = [
@@ -17,6 +21,7 @@ pub const TEACHER_COLORS: [&str; 10] = [
 pub enum Screen {
     Calendar,
     Teachers,
+    Subjects,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +40,7 @@ pub struct App {
     pub(crate) db_path: PathBuf,
     pub(crate) startup_error: Option<String>,
     pub(crate) teachers: Vec<Teacher>,
+    pub(crate) subjects: Vec<Subject>,
     pub(crate) slots: Vec<Slot>,
     pub(crate) anchor: NaiveDate,
     pub(crate) view: CalendarView,
@@ -43,6 +49,7 @@ pub struct App {
     pub(crate) modal: Option<Modal>,
     pub(crate) banner: Option<Banner>,
     pub(crate) teacher_search: String,
+    pub(crate) subject_search: String,
     pub(crate) screenshot_path: Option<PathBuf>,
     pub(crate) screenshot_requested: bool,
 }
@@ -50,7 +57,9 @@ pub struct App {
 pub enum Modal {
     Slot(SlotEditor),
     Teacher(TeacherEditor),
+    Subject(SubjectEditor),
     ConfirmDeleteTeacher(ConfirmDeleteTeacher),
+    ConfirmDeleteSubject(ConfirmDeleteSubject),
 }
 
 pub struct SlotEditor {
@@ -69,9 +78,16 @@ pub struct SlotEditor {
 pub struct TeacherEditor {
     pub id: Option<TeacherId>,
     pub name: String,
-    pub subject: String,
+    pub selected_subjects: BTreeSet<SubjectId>,
     pub note: String,
     pub color: String,
+    pub error: Option<String>,
+    pub confirm_delete: bool,
+}
+
+pub struct SubjectEditor {
+    pub id: Option<SubjectId>,
+    pub name: String,
     pub error: Option<String>,
     pub confirm_delete: bool,
 }
@@ -80,6 +96,12 @@ pub struct ConfirmDeleteTeacher {
     pub id: TeacherId,
     pub name: String,
     pub assigned_slots: usize,
+}
+
+pub struct ConfirmDeleteSubject {
+    pub id: SubjectId,
+    pub name: String,
+    pub linked_teachers: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +157,7 @@ impl App {
             db_path,
             startup_error: None,
             teachers: Vec::new(),
+            subjects: Vec::new(),
             slots: Vec::new(),
             anchor: Local::now().date_naive(),
             view: CalendarView::Week,
@@ -143,6 +166,7 @@ impl App {
             modal: None,
             banner: None,
             teacher_search: String::new(),
+            subject_search: String::new(),
             screenshot_path: None,
             screenshot_requested: false,
         };
@@ -159,8 +183,20 @@ impl App {
         match std::env::var("EDU_PREVIEW").as_deref() {
             Ok("month") => self.view = CalendarView::Month,
             Ok("teachers") => self.screen = Screen::Teachers,
+            Ok("subjects") => self.screen = Screen::Subjects,
+            Ok("subject") => self.open_new_subject(),
             Ok("slot") => self.open_new_slot(None),
             Ok("teacher") => self.open_new_teacher(),
+            Ok("edit-teacher") => {
+                if let Some(id) = self.teachers.first().map(|teacher| teacher.id) {
+                    self.open_teacher(id);
+                }
+            }
+            Ok("edit-subject") => {
+                if let Some(id) = self.subjects.first().map(|subject| subject.id) {
+                    self.open_subject(id);
+                }
+            }
             Ok("edit-slot") => {
                 if let Some(id) = self.slots.first().map(|slot| slot.id) {
                     self.open_slot(id);
@@ -176,6 +212,7 @@ impl App {
             db_path,
             startup_error: Some(error),
             teachers: Vec::new(),
+            subjects: Vec::new(),
             slots: Vec::new(),
             anchor: Local::now().date_naive(),
             view: CalendarView::Week,
@@ -184,6 +221,7 @@ impl App {
             modal: None,
             banner: None,
             teacher_search: String::new(),
+            subject_search: String::new(),
             screenshot_path: None,
             screenshot_requested: false,
         }
@@ -214,9 +252,11 @@ impl App {
             .ok_or_else(|| "База данных недоступна".to_string())?;
 
         let teachers = database.teachers().map_err(|error| error.to_string())?;
+        let subjects = database.subjects().map_err(|error| error.to_string())?;
         let slots = database.slots().map_err(|error| error.to_string())?;
 
         self.teachers = teachers;
+        self.subjects = subjects;
         self.slots = slots;
 
         if let Some(filter) = self.filter
@@ -242,6 +282,56 @@ impl App {
 
     pub(crate) fn teacher(&self, id: TeacherId) -> Option<&Teacher> {
         self.teachers.iter().find(|teacher| teacher.id == id)
+    }
+
+    pub(crate) fn subject(&self, id: SubjectId) -> Option<&Subject> {
+        self.subjects.iter().find(|subject| subject.id == id)
+    }
+
+    pub(crate) fn teacher_subject_names(&self, teacher: &Teacher) -> Vec<&str> {
+        let mut names: Vec<&str> = teacher
+            .subject_ids
+            .iter()
+            .filter_map(|subject_id| {
+                self.subject(*subject_id)
+                    .map(|subject| subject.name.as_str())
+            })
+            .collect();
+        names.sort_unstable_by_key(|name| name.to_lowercase());
+        names
+    }
+
+    pub(crate) fn teacher_label(&self, teacher: &Teacher) -> String {
+        let subjects = self.teacher_subject_names(teacher);
+
+        if subjects.is_empty() {
+            teacher.display_name().to_string()
+        } else {
+            format!("{} · {}", teacher.display_name(), subjects.join(", "))
+        }
+    }
+
+    pub(crate) fn subject_teacher_count(&self, id: SubjectId) -> usize {
+        self.teachers
+            .iter()
+            .filter(|teacher| teacher.subject_ids.contains(&id))
+            .count()
+    }
+
+    pub(crate) fn subject_teacher_names(&self, id: SubjectId) -> Vec<&str> {
+        self.teachers
+            .iter()
+            .filter(|teacher| teacher.subject_ids.contains(&id))
+            .map(Teacher::display_name)
+            .collect()
+    }
+
+    pub(crate) fn subject_name_exists(&self, name: &str, excluding: Option<SubjectId>) -> bool {
+        let name = name.trim().to_lowercase();
+
+        self.subjects.iter().any(|subject| {
+            Some(subject.id) != excluding && subject.name.trim().to_lowercase() == name
+        })
     }
 
     pub(crate) fn teacher_filter_options(&self) -> Vec<TeacherFilter> {
@@ -327,7 +417,7 @@ impl App {
         self.modal = Some(Modal::Teacher(TeacherEditor {
             id: None,
             name: String::new(),
-            subject: String::new(),
+            selected_subjects: BTreeSet::new(),
             note: String::new(),
             color,
             error: None,
@@ -344,7 +434,7 @@ impl App {
         self.modal = Some(Modal::Teacher(TeacherEditor {
             id: Some(teacher.id),
             name: teacher.name.clone(),
-            subject: teacher.subject.clone(),
+            selected_subjects: teacher.subject_ids.iter().copied().collect(),
             note: teacher.note.clone(),
             color: teacher.color.clone(),
             error: None,
@@ -365,6 +455,42 @@ impl App {
         }));
     }
 
+    pub(crate) fn open_new_subject(&mut self) {
+        self.modal = Some(Modal::Subject(SubjectEditor {
+            id: None,
+            name: String::new(),
+            error: None,
+            confirm_delete: false,
+        }));
+    }
+
+    pub(crate) fn open_subject(&mut self, id: SubjectId) {
+        let Some(subject) = self.subject(id) else {
+            self.set_banner("Предмет больше не существует");
+            return;
+        };
+
+        self.modal = Some(Modal::Subject(SubjectEditor {
+            id: Some(subject.id),
+            name: subject.name.clone(),
+            error: None,
+            confirm_delete: false,
+        }));
+    }
+
+    pub(crate) fn ask_delete_subject(&mut self, id: SubjectId) {
+        let Some(subject) = self.subject(id) else {
+            self.set_banner("Предмет больше не существует");
+            return;
+        };
+
+        self.modal = Some(Modal::ConfirmDeleteSubject(ConfirmDeleteSubject {
+            id,
+            name: subject.name.clone(),
+            linked_teachers: self.subject_teacher_count(id),
+        }));
+    }
+
     pub(crate) fn slot_draft(editor: &SlotEditor) -> SlotDraft {
         SlotDraft {
             id: editor.id,
@@ -382,10 +508,17 @@ impl App {
         TeacherDraft {
             id: editor.id,
             name: editor.name.clone(),
-            subject: editor.subject.clone(),
+            subject_ids: editor.selected_subjects.iter().copied().collect(),
             note: editor.note.clone(),
             color: editor.color.clone(),
         }
+    }
+
+    pub(crate) fn subject_draft(editor: &SubjectEditor) -> Result<ValidatedSubject, Vec<String>> {
+        validate_subject_draft(&SubjectDraft {
+            id: editor.id,
+            name: editor.name.clone(),
+        })
     }
 }
 

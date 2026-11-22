@@ -1,9 +1,11 @@
 use std::collections::{BTreeSet, HashSet};
 
-use crate::domain::model::{Slot, SlotId, SlotKind, Teacher, TeacherId, Weekday};
+use crate::domain::model::{
+    Slot, SlotId, SlotKind, Subject, SubjectId, Teacher, TeacherId, Weekday,
+};
 
 pub const TEACHER_NAME_MAX: usize = 120;
-pub const TEACHER_SUBJECT_MAX: usize = 120;
+pub const SUBJECT_NAME_MAX: usize = 120;
 pub const TEACHER_NOTE_MAX: usize = 500;
 pub const SLOT_TITLE_MAX: usize = 120;
 pub const SLOT_DESCRIPTION_MAX: usize = 2000;
@@ -56,7 +58,7 @@ pub fn overlaps(a_start: u16, a_end: u16, b_start: u16, b_end: u16) -> bool {
 pub struct TeacherDraft {
     pub id: Option<TeacherId>,
     pub name: String,
-    pub subject: String,
+    pub subject_ids: Vec<SubjectId>,
     pub note: String,
     pub color: String,
 }
@@ -65,15 +67,17 @@ pub struct TeacherDraft {
 pub struct ValidatedTeacher {
     pub id: Option<TeacherId>,
     pub name: String,
-    pub subject: String,
+    pub subject_ids: Vec<SubjectId>,
     pub note: String,
     pub color: String,
 }
 
-pub fn validate_teacher_draft(draft: &TeacherDraft) -> Result<ValidatedTeacher, Vec<String>> {
+pub fn validate_teacher_draft(
+    draft: &TeacherDraft,
+    subjects: &[Subject],
+) -> Result<ValidatedTeacher, Vec<String>> {
     let mut errors = Vec::new();
     let name = draft.name.trim().to_string();
-    let subject = draft.subject.trim().to_string();
     let note = draft.note.trim().to_string();
 
     if name.is_empty() {
@@ -81,12 +85,6 @@ pub fn validate_teacher_draft(draft: &TeacherDraft) -> Result<ValidatedTeacher, 
     } else if name.chars().count() > TEACHER_NAME_MAX {
         errors.push(format!(
             "Имя преподавателя не должно быть длиннее {TEACHER_NAME_MAX} символов"
-        ));
-    }
-
-    if subject.chars().count() > TEACHER_SUBJECT_MAX {
-        errors.push(format!(
-            "Предмет не должен быть длиннее {TEACHER_SUBJECT_MAX} символов"
         ));
     }
 
@@ -100,14 +98,59 @@ pub fn validate_teacher_draft(draft: &TeacherDraft) -> Result<ValidatedTeacher, 
         errors.push("Выберите цвет преподавателя".to_string());
     }
 
+    let known_subjects: HashSet<SubjectId> = subjects.iter().map(|subject| subject.id).collect();
+    let mut subject_ids = Vec::new();
+    let mut seen = HashSet::new();
+
+    for subject_id in &draft.subject_ids {
+        if !known_subjects.contains(subject_id) {
+            errors.push("Выбран неизвестный предмет".to_string());
+        } else if seen.insert(*subject_id) {
+            subject_ids.push(*subject_id);
+        }
+    }
+
+    subject_ids.sort_unstable();
+
     if errors.is_empty() {
         Ok(ValidatedTeacher {
             id: draft.id,
             name,
-            subject,
+            subject_ids,
             note,
             color: draft.color.trim().to_string(),
         })
+    } else {
+        Err(errors)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SubjectDraft {
+    pub id: Option<SubjectId>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedSubject {
+    pub id: Option<SubjectId>,
+    pub name: String,
+}
+
+pub fn validate_subject_draft(draft: &SubjectDraft) -> Result<ValidatedSubject, Vec<String>> {
+    let mut errors = Vec::new();
+    let name = draft.name.trim().to_string();
+
+    if name.is_empty() {
+        errors.push("Название предмета не может быть пустым".to_string());
+    } else if name.chars().count() > SUBJECT_NAME_MAX {
+        errors.push(format!(
+            "Название предмета не должно быть длиннее {SUBJECT_NAME_MAX} символов"
+        ));
+    }
+
+    if errors.is_empty() {
+        Ok(ValidatedSubject { id: draft.id, name })
     } else {
         Err(errors)
     }
@@ -319,9 +362,18 @@ mod tests {
         Teacher {
             id,
             name: name.to_string(),
-            subject: String::new(),
+            subject_ids: Vec::new(),
             note: String::new(),
             color: "#2563EB".to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn subject(id: i64, name: &str) -> Subject {
+        Subject {
+            id,
+            name: name.to_string(),
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -424,19 +476,38 @@ mod tests {
 
     #[test]
     fn validates_teacher() {
+        let subjects = vec![subject(1, "Математика"), subject(2, "Физика")];
         let valid = TeacherDraft {
             name: "  Иванов Иван  ".to_string(),
+            subject_ids: vec![2, 1, 2],
             color: "#2563EB".to_string(),
             ..TeacherDraft::default()
         };
 
-        let teacher = validate_teacher_draft(&valid).unwrap();
+        let teacher = validate_teacher_draft(&valid, &subjects).unwrap();
         assert_eq!(teacher.name, "Иванов Иван");
+        assert_eq!(teacher.subject_ids, vec![1, 2]);
 
         let invalid = TeacherDraft {
             color: "red".to_string(),
+            subject_ids: vec![99],
             ..TeacherDraft::default()
         };
-        assert!(validate_teacher_draft(&invalid).is_err());
+        assert!(validate_teacher_draft(&invalid, &subjects).is_err());
+    }
+
+    #[test]
+    fn validates_subject() {
+        let valid = SubjectDraft {
+            name: "  Математика  ".to_string(),
+            ..SubjectDraft::default()
+        };
+        assert_eq!(validate_subject_draft(&valid).unwrap().name, "Математика");
+
+        let invalid = SubjectDraft {
+            name: "   ".to_string(),
+            ..SubjectDraft::default()
+        };
+        assert!(validate_subject_draft(&invalid).is_err());
     }
 }

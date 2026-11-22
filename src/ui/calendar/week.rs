@@ -5,7 +5,7 @@ use iced::alignment::{self, Alignment};
 use iced::mouse;
 use iced::widget::canvas::{self, Frame, Geometry, Path, Text};
 use iced::widget::{canvas as canvas_widget, container, row, scrollable, space, text};
-use iced::{Border, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Border, Color, Element, Fill, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::{App, Message};
 use crate::domain::model::{Slot, Teacher, Weekday};
@@ -183,39 +183,135 @@ impl WeekCanvas<'_> {
     }
 }
 
+#[derive(Default)]
+struct WeekCanvasState {
+    drag: Option<DragState>,
+}
+
+struct DragState {
+    slot_id: i64,
+    duration: u16,
+    grab_offset_y: f32,
+    origin: Point,
+    pointer: Point,
+    moved: bool,
+}
+
 impl canvas::Program<Message> for WeekCanvas<'_> {
-    type State = ();
+    type State = WeekCanvasState;
 
     fn update(
         &self,
-        _state: &mut Self::State,
+        state: &mut Self::State,
         event: &canvas::Event,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if let canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) = event
+            && let Some(drag) = state.drag.take()
+        {
+            if let Some(position) = cursor.position_in(bounds) {
+                if drag.moved {
+                    let weekday = week_layout::weekday_at(bounds, position.x)?;
+                    let start_minute = week_layout::target_start_minute(
+                        bounds,
+                        position,
+                        drag.grab_offset_y,
+                        drag.duration,
+                        self.start_minute,
+                        self.end_minute,
+                    );
+
+                    return Some(
+                        canvas::Action::publish(Message::SlotMoved {
+                            id: drag.slot_id,
+                            weekday,
+                            start_minute,
+                        })
+                        .and_capture(),
+                    );
+                }
+
+                return Some(
+                    canvas::Action::publish(Message::WeekSlotClicked(drag.slot_id)).and_capture(),
+                );
+            }
+
+            return Some(canvas::Action::request_redraw().and_capture());
+        }
+
+        if let canvas::Event::Mouse(mouse::Event::CursorLeft) = event
+            && state.drag.take().is_some()
+        {
+            return Some(canvas::Action::request_redraw().and_capture());
+        }
+
         let position = cursor.position_in(bounds)?;
 
-        let canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) = event else {
+        let canvas::Event::Mouse(event) = event else {
             return None;
         };
 
-        if let Some(slot_id) = self.hit_test(bounds, position) {
-            return Some(canvas::Action::publish(Message::WeekSlotClicked(slot_id)).and_capture());
+        match event {
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                if let Some(slot_id) = self.hit_test(bounds, position) {
+                    let slot = self.slots.iter().find(|slot| slot.id == slot_id)?;
+
+                    let rect = self
+                        .slot_rects(bounds)
+                        .into_iter()
+                        .find(|laid_out| laid_out.slot_id == slot_id)
+                        .map(|laid_out| laid_out.rect)?;
+
+                    state.drag = Some(DragState {
+                        slot_id,
+                        duration: slot.duration_minutes(),
+                        grab_offset_y: position.y - rect.y,
+                        origin: position,
+                        pointer: position,
+                        moved: false,
+                    });
+
+                    return Some(canvas::Action::request_redraw().and_capture());
+                }
+
+                let weekday = week_layout::weekday_at(bounds, position.x)?;
+                let minute =
+                    week_layout::minute_at(bounds, position.y, self.start_minute, self.end_minute);
+
+                Some(
+                    canvas::Action::publish(Message::WeekEmptyClicked { weekday, minute })
+                        .and_capture(),
+                )
+            }
+            mouse::Event::CursorMoved { .. } => {
+                let drag = state.drag.as_mut()?;
+                drag.pointer = position;
+
+                if !drag.moved {
+                    let distance = (position.x - drag.origin.x)
+                        .abs()
+                        .max((position.y - drag.origin.y).abs());
+
+                    drag.moved = distance >= 4.0;
+                }
+
+                Some(canvas::Action::request_redraw().and_capture())
+            }
+            _ => None,
         }
-
-        let weekday = week_layout::weekday_at(bounds, position.x)?;
-
-        let minute = week_layout::minute_at(bounds, position.y, self.start_minute, self.end_minute);
-
-        Some(canvas::Action::publish(Message::WeekEmptyClicked { weekday, minute }).and_capture())
     }
 
     fn mouse_interaction(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        if state.drag.is_some() {
+            return mouse::Interaction::Grabbing;
+        }
+
         let Some(position) = cursor.position_in(bounds) else {
             return mouse::Interaction::default();
         };
@@ -225,7 +321,7 @@ impl canvas::Program<Message> for WeekCanvas<'_> {
             .is_some_and(|slot_id| self.slots.iter().any(|slot| slot.id == slot_id));
 
         if over_slot {
-            mouse::Interaction::Pointer
+            mouse::Interaction::Grab
         } else {
             mouse::Interaction::Crosshair
         }
@@ -233,7 +329,7 @@ impl canvas::Program<Message> for WeekCanvas<'_> {
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -331,11 +427,112 @@ impl canvas::Program<Message> for WeekCanvas<'_> {
                 continue;
             };
 
+            if state
+                .drag
+                .as_ref()
+                .is_some_and(|drag| drag.moved && drag.slot_id == slot.id)
+            {
+                continue;
+            }
+
             draw_slot(&mut frame, slot, laid_out.rect, self);
+        }
+
+        if let Some(drag) = &state.drag
+            && drag.moved
+            && let Some(weekday) = week_layout::weekday_at(bounds, drag.pointer.x)
+            && let Some(slot) = self.slots.iter().find(|slot| slot.id == drag.slot_id)
+        {
+            let start_minute = week_layout::target_start_minute(
+                bounds,
+                drag.pointer,
+                drag.grab_offset_y,
+                drag.duration,
+                self.start_minute,
+                self.end_minute,
+            );
+            draw_drag_preview(
+                &mut frame,
+                slot,
+                weekday,
+                start_minute,
+                drag.duration,
+                bounds,
+                self,
+            );
         }
 
         vec![frame.into_geometry()]
     }
+}
+
+fn draw_drag_preview(
+    frame: &mut Frame,
+    slot: &Slot,
+    weekday: Weekday,
+    start_minute: u16,
+    duration: u16,
+    bounds: Rectangle,
+    canvas: &WeekCanvas<'_>,
+) {
+    let day_width = (bounds.width - week_layout::TIME_GUTTER) / 7.0;
+    let x = week_layout::TIME_GUTTER + weekday.index() as f32 * day_width + 2.0;
+    let y = week_layout::y_for_minute(
+        Rectangle::new(Point::ORIGIN, bounds.size()),
+        start_minute,
+        canvas.start_minute,
+        canvas.end_minute,
+    );
+    let height = (f32::from(duration) / f32::from(canvas.end_minute - canvas.start_minute)
+        * bounds.height)
+        .max(18.0);
+    let rect = Rectangle::new(
+        Point::new(x, y + 1.0),
+        Size::new((day_width - 4.0).max(1.0), (height - 2.0).max(1.0)),
+    );
+    let accent = Color {
+        a: 0.16,
+        ..theme::ACCENT
+    };
+
+    frame.fill(
+        &Path::rounded_rectangle(rect.position(), rect.size(), 7.0.into()),
+        accent,
+    );
+    frame.stroke(
+        &Path::rounded_rectangle(rect.position(), rect.size(), 7.0.into()),
+        canvas::Stroke::default()
+            .with_color(theme::ACCENT)
+            .with_width(2.0),
+    );
+
+    frame.with_clip(rect, |frame| {
+        frame.fill_text(Text {
+            content: format!(
+                "{}–{}",
+                format_time(start_minute),
+                format_time(start_minute.saturating_add(duration))
+            ),
+            position: Point::new(rect.x + 8.0, rect.y + 5.0),
+            max_width: (rect.width - 16.0).max(1.0),
+            color: theme::ACCENT,
+            size: 10.0.into(),
+            font: theme::semibold(),
+            ..Text::default()
+        });
+
+        if rect.height >= 34.0 {
+            frame.fill_text(Text {
+                content: slot.display_title().to_string(),
+                position: Point::new(rect.x + 8.0, rect.y + 20.0),
+                max_width: (rect.width - 16.0).max(1.0),
+                color: theme::TEXT,
+                size: 12.0.into(),
+                font: theme::semibold(),
+                ..Text::default()
+            });
+        }
+    });
 }
 
 fn draw_slot(frame: &mut Frame, slot: &Slot, rect: Rectangle, canvas: &WeekCanvas<'_>) {
@@ -462,4 +659,132 @@ fn draw_slot(frame: &mut Frame, slot: &Slot, rect: Rectangle, canvas: &WeekCanva
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::model::SlotKind;
+    use chrono::NaiveDate;
+    use iced::Size;
+    use iced::widget::canvas::Program;
+
+    fn test_slot() -> Slot {
+        Slot {
+            id: 1,
+            weekday: Weekday::Monday,
+            start_minute: 9 * 60,
+            end_minute: 10 * 60 + 30,
+            kind: SlotKind::Lesson,
+            title: "Математика".to_string(),
+            description: String::new(),
+            teacher_ids: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn test_canvas(slots: &[Slot]) -> WeekCanvas<'_> {
+        let week = std::array::from_fn(|index| {
+            NaiveDate::from_ymd_opt(2026, 11, 16).unwrap() + chrono::Duration::days(index as i64)
+        });
+
+        WeekCanvas {
+            week,
+            today: NaiveDate::from_ymd_opt(2026, 11, 16).unwrap(),
+            slots,
+            teachers: &[],
+            filter: None,
+            start_minute: 7 * 60,
+            end_minute: 22 * 60,
+        }
+    }
+
+    fn press() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+    }
+
+    fn release() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+    }
+
+    #[test]
+    fn click_on_slot_is_published_on_release() {
+        let slots = vec![test_slot()];
+        let canvas = test_canvas(&slots);
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(768.0, 900.0));
+        let rect = canvas.slot_rects(bounds)[0].rect;
+        let point = rect.center();
+        let mut state = WeekCanvasState::default();
+
+        let action = canvas.update(
+            &mut state,
+            &press(),
+            bounds,
+            mouse::Cursor::Available(point),
+        );
+        assert!(action.is_some());
+        assert!(state.drag.is_some());
+
+        let action = canvas
+            .update(
+                &mut state,
+                &release(),
+                bounds,
+                mouse::Cursor::Available(point),
+            )
+            .unwrap();
+        let (message, _, _) = action.into_inner();
+        assert!(matches!(message, Some(Message::WeekSlotClicked(1))));
+        assert!(state.drag.is_none());
+    }
+
+    #[test]
+    fn dragging_slot_publishes_new_day_and_time() {
+        let slots = vec![test_slot()];
+        let canvas = test_canvas(&slots);
+        let bounds = Rectangle::new(Point::ORIGIN, Size::new(768.0, 900.0));
+        let rect = canvas.slot_rects(bounds)[0].rect;
+        let start = rect.center();
+        let mut state = WeekCanvasState::default();
+
+        canvas.update(
+            &mut state,
+            &press(),
+            bounds,
+            mouse::Cursor::Available(start),
+        );
+        let day_width = (bounds.width - week_layout::TIME_GUTTER) / 7.0;
+        let target = Point::new(week_layout::TIME_GUTTER + day_width * 1.5, start.y);
+        canvas.update(
+            &mut state,
+            &canvas::Event::Mouse(mouse::Event::CursorMoved { position: target }),
+            bounds,
+            mouse::Cursor::Available(target),
+        );
+        assert!(state.drag.as_ref().is_some_and(|drag| drag.moved));
+
+        let action = canvas
+            .update(
+                &mut state,
+                &release(),
+                bounds,
+                mouse::Cursor::Available(target),
+            )
+            .unwrap();
+        let (message, _, _) = action.into_inner();
+
+        match message {
+            Some(Message::SlotMoved {
+                id,
+                weekday,
+                start_minute,
+            }) => {
+                assert_eq!(id, 1);
+                assert_eq!(weekday, Weekday::Tuesday);
+                assert_eq!(start_minute, 9 * 60);
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
 }

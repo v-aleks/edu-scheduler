@@ -1,4 +1,4 @@
-use iced::widget::{button, container, row, space, text, text_input};
+use iced::widget::{button, checkbox, container, row, scrollable, space, text, text_input};
 use iced::{Alignment, Border, Element, Fill, Length};
 
 use crate::app::{App, Message, TeacherEditor, TeacherFormMessage as FormMessage};
@@ -26,11 +26,6 @@ pub fn view<'a>(app: &'a App, editor: &'a TeacherEditor) -> Element<'a, Message>
         .padding([8, 10])
         .size(13);
 
-    let subject = text_input("Математика", &editor.subject)
-        .on_input(|value| Message::TeacherForm(FormMessage::Subject(value)))
-        .padding([8, 10])
-        .size(13);
-
     let note = text_input("Комментарий", &editor.note)
         .on_input(|value| Message::TeacherForm(FormMessage::Note(value)))
         .padding([8, 10])
@@ -52,9 +47,41 @@ pub fn view<'a>(app: &'a App, editor: &'a TeacherEditor) -> Element<'a, Message>
         );
     }
 
+    let mut subject_rows = iced::widget::column![].spacing(4).width(Fill);
+
+    if app.subjects.is_empty() {
+        subject_rows = subject_rows.push(
+            text("Предметов пока нет. Добавьте их на экране «Предметы».")
+                .size(12)
+                .color(theme::MUTED),
+        );
+    } else {
+        for subject in &app.subjects {
+            let selected = editor.selected_subjects.contains(&subject.id);
+            let subject_id = subject.id;
+
+            subject_rows = subject_rows.push(
+                checkbox(selected)
+                    .label(subject.name.clone())
+                    .size(15)
+                    .text_size(13)
+                    .on_toggle(move |_| {
+                        Message::TeacherForm(FormMessage::ToggleSubject(subject_id))
+                    }),
+            );
+        }
+    }
+
+    let subjects = container(scrollable(subject_rows).height(132).direction(
+        scrollable::Direction::Vertical(scrollable::Scrollbar::default()),
+    ))
+    .padding(10)
+    .width(Fill)
+    .style(theme::muted_box);
+
     let mut content = iced::widget::column![
         section("Имя", name.into()),
-        section("Предмет", subject.into()),
+        section("Предметы", subjects.into()),
         section("Заметка", note.into()),
         section("Цвет", palette.into()),
     ]

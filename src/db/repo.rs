@@ -6,8 +6,8 @@ use std::time::Duration;
 use rusqlite::{Connection, params};
 
 use crate::db::migrations::{SCHEMA_VERSION, migrate};
-use crate::domain::model::{Slot, SlotKind, Teacher, Weekday};
-use crate::domain::validation::{SlotCandidate, ValidatedTeacher};
+use crate::domain::model::{Slot, SlotKind, Subject, SubjectId, Teacher, Weekday};
+use crate::domain::validation::{SlotCandidate, ValidatedSubject, ValidatedTeacher};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
@@ -25,6 +25,9 @@ pub enum DbError {
 
     #[error("Слот с id {0} не найден")]
     SlotNotFound(i64),
+
+    #[error("Предмет с id {0} не найден")]
+    SubjectNotFound(i64),
 
     #[error("Неподдерживаемая версия схемы БД: {0}")]
     UnsupportedSchema(i64),
@@ -81,8 +84,27 @@ impl Database {
     }
 
     pub fn teachers(&self) -> Result<Vec<Teacher>, DbError> {
+        let mut subjects_by_teacher: HashMap<i64, Vec<SubjectId>> = HashMap::new();
+
+        {
+            let mut statement = self.connection.prepare(
+                "SELECT teacher_id, subject_id FROM teacher_subjects
+                 ORDER BY teacher_id, subject_id",
+            )?;
+            let rows = statement
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
+
+            for row in rows {
+                let (teacher_id, subject_id) = row?;
+                subjects_by_teacher
+                    .entry(teacher_id)
+                    .or_default()
+                    .push(subject_id);
+            }
+        }
+
         let mut statement = self.connection.prepare(
-            "SELECT id, name, subject, note, color, created_at, updated_at
+            "SELECT id, name, note, color, created_at, updated_at
              FROM teachers",
         )?;
 
@@ -91,14 +113,18 @@ impl Database {
                 Ok(Teacher {
                     id: row.get(0)?,
                     name: row.get(1)?,
-                    subject: row.get(2)?,
-                    note: row.get(3)?,
-                    color: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
+                    subject_ids: Vec::new(),
+                    note: row.get(2)?,
+                    color: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+
+        for teacher in &mut teachers {
+            teacher.subject_ids = subjects_by_teacher.remove(&teacher.id).unwrap_or_default();
+        }
 
         teachers.sort_by(|left, right| {
             left.name
@@ -108,6 +134,32 @@ impl Database {
         });
 
         Ok(teachers)
+    }
+
+    pub fn subjects(&self) -> Result<Vec<Subject>, DbError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id, name, created_at, updated_at FROM subjects")?;
+
+        let mut subjects = statement
+            .query_map([], |row| {
+                Ok(Subject {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        subjects.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        Ok(subjects)
     }
 
     pub fn slots(&self) -> Result<Vec<Slot>, DbError> {
@@ -190,38 +242,93 @@ impl Database {
     }
 
     pub fn save_teacher(&mut self, teacher: &ValidatedTeacher) -> Result<i64, DbError> {
-        match teacher.id {
+        let transaction = self.connection.transaction()?;
+
+        let id = match teacher.id {
             Some(id) => {
-                let changed = self.connection.execute(
+                let changed = transaction.execute(
                     "UPDATE teachers
-                     SET name = ?1, subject = ?2, note = ?3, color = ?4,
+                     SET name = ?1, note = ?2, color = ?3,
                          updated_at = CURRENT_TIMESTAMP
-                     WHERE id = ?5",
-                    params![
-                        teacher.name,
-                        teacher.subject,
-                        teacher.note,
-                        teacher.color,
-                        id
-                    ],
+                     WHERE id = ?4",
+                    params![teacher.name, teacher.note, teacher.color, id],
                 )?;
 
                 if changed == 0 {
                     return Err(DbError::TeacherNotFound(id));
                 }
 
+                id
+            }
+            None => {
+                transaction.execute(
+                    "INSERT INTO teachers (name, note, color)
+                     VALUES (?1, ?2, ?3)",
+                    params![teacher.name, teacher.note, teacher.color],
+                )?;
+
+                transaction.last_insert_rowid()
+            }
+        };
+
+        transaction.execute(
+            "DELETE FROM teacher_subjects WHERE teacher_id = ?1",
+            params![id],
+        )?;
+
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO teacher_subjects (teacher_id, subject_id)
+                 VALUES (?1, ?2)",
+            )?;
+
+            for subject_id in &teacher.subject_ids {
+                statement.execute(params![id, subject_id])?;
+            }
+        }
+
+        transaction.commit()?;
+
+        Ok(id)
+    }
+
+    pub fn save_subject(&mut self, subject: &ValidatedSubject) -> Result<i64, DbError> {
+        match subject.id {
+            Some(id) => {
+                let changed = self.connection.execute(
+                    "UPDATE subjects
+                     SET name = ?1, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?2",
+                    params![subject.name, id],
+                )?;
+
+                if changed == 0 {
+                    return Err(DbError::SubjectNotFound(id));
+                }
+
                 Ok(id)
             }
             None => {
                 self.connection.execute(
-                    "INSERT INTO teachers (name, subject, note, color)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![teacher.name, teacher.subject, teacher.note, teacher.color],
+                    "INSERT INTO subjects (name) VALUES (?1)",
+                    params![subject.name],
                 )?;
 
                 Ok(self.connection.last_insert_rowid())
             }
         }
+    }
+
+    pub fn delete_subject(&mut self, id: i64) -> Result<(), DbError> {
+        let deleted = self
+            .connection
+            .execute("DELETE FROM subjects WHERE id = ?1", params![id])?;
+
+        if deleted == 0 {
+            return Err(DbError::SubjectNotFound(id));
+        }
+
+        Ok(())
     }
 
     pub fn delete_teacher(&mut self, id: i64) -> Result<(), DbError> {
@@ -327,15 +434,22 @@ fn configure(connection: &Connection) -> Result<(), DbError> {
 mod tests {
     use super::*;
     use crate::domain::model::Weekday;
-    use crate::domain::validation::ValidatedTeacher;
+    use crate::domain::validation::{ValidatedSubject, ValidatedTeacher};
 
     fn teacher(name: &str) -> ValidatedTeacher {
         ValidatedTeacher {
             id: None,
             name: name.to_string(),
-            subject: String::new(),
+            subject_ids: Vec::new(),
             note: String::new(),
             color: "#2563EB".to_string(),
+        }
+    }
+
+    fn subject(name: &str) -> ValidatedSubject {
+        ValidatedSubject {
+            id: None,
+            name: name.to_string(),
         }
     }
 
@@ -369,6 +483,49 @@ mod tests {
         let teachers = database.teachers().unwrap();
         assert_eq!(teachers[0].name, "Анна Петрова");
         assert_eq!(teachers[1].id, first);
+    }
+
+    #[test]
+    fn saves_subjects_and_teacher_links() {
+        let mut database = Database::open_in_memory().unwrap();
+        let math = database.save_subject(&subject("Математика")).unwrap();
+        let physics = database.save_subject(&subject("Физика")).unwrap();
+
+        let mut candidate = teacher("Иванов");
+        candidate.subject_ids = vec![physics, math];
+        let id = database.save_teacher(&candidate).unwrap();
+
+        let teachers = database.teachers().unwrap();
+        assert_eq!(teachers[0].subject_ids, vec![math, physics]);
+
+        let mut updated = teacher("Иванов Иван");
+        updated.id = Some(id);
+        updated.subject_ids = vec![physics];
+        database.save_teacher(&updated).unwrap();
+        assert_eq!(database.teachers().unwrap()[0].subject_ids, vec![physics]);
+
+        let subjects = database.subjects().unwrap();
+        assert_eq!(
+            subjects
+                .iter()
+                .map(|subject| subject.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Математика", "Физика"]
+        );
+    }
+
+    #[test]
+    fn deleting_subject_unlinks_it_from_teachers() {
+        let mut database = Database::open_in_memory().unwrap();
+        let math = database.save_subject(&subject("Математика")).unwrap();
+        let mut candidate = teacher("Иванов");
+        candidate.subject_ids = vec![math];
+        database.save_teacher(&candidate).unwrap();
+
+        database.delete_subject(math).unwrap();
+
+        assert!(database.subjects().unwrap().is_empty());
+        assert!(database.teachers().unwrap()[0].subject_ids.is_empty());
     }
 
     #[test]
@@ -426,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_over_100_percent_teacher_ids_via_foreign_keys() {
+    fn rejects_unknown_teacher_ids_via_foreign_keys() {
         let mut database = Database::open_in_memory().unwrap();
         let result = database.save_slot(&slot(Weekday::Monday, 540, 630, vec![999]));
         assert!(result.is_err());

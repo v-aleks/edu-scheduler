@@ -25,3 +25,6 @@ target/
 
 # Packaging output
 /dist
+
+# macOS
+.DS_Store

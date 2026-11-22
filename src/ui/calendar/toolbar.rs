@@ -9,6 +9,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     match app.screen {
         Screen::Calendar => calendar_toolbar(app),
         Screen::Teachers => teachers_toolbar(app),
+        Screen::Subjects => subjects_toolbar(app),
     }
 }
 
@@ -47,7 +48,7 @@ fn calendar_toolbar(app: &App) -> Element<'_, Message> {
                 .size(22)
                 .font(theme::bold())
                 .color(theme::TEXT),
-            text("Управление недельным расписанием преподавателей")
+            text("Управление расписанием · перетаскивайте слоты, чтобы менять день и время")
                 .size(12)
                 .color(theme::MUTED),
         ]
@@ -61,6 +62,10 @@ fn calendar_toolbar(app: &App) -> Element<'_, Message> {
             .padding([9, 14])
             .style(theme::secondary_button)
             .on_press(Message::ShowTeachers),
+        button(text(strings::SUBJECTS).size(13))
+            .padding([9, 14])
+            .style(theme::secondary_button)
+            .on_press(Message::ShowSubjects),
     ]
     .align_y(Alignment::Center)
     .spacing(10);
@@ -173,11 +178,64 @@ fn teachers_toolbar(app: &App) -> Element<'_, Message> {
             .on_input(Message::TeacherSearch)
             .padding([8, 10])
             .size(13)
-            .width(Length::Fixed(280.0)),
+            .width(Length::Fixed(260.0)),
+        button(text(strings::SUBJECTS).size(13))
+            .padding([9, 14])
+            .style(theme::secondary_button)
+            .on_press(Message::ShowSubjects),
         button(text(strings::ADD_TEACHER).size(13))
             .padding([9, 14])
             .style(theme::primary_button)
             .on_press(Message::OpenNewTeacher),
+    ]
+    .align_y(Alignment::Center)
+    .spacing(10);
+
+    container(title_row)
+        .padding([14, 18])
+        .width(Fill)
+        .style(|_theme| container::Style {
+            background: Some(theme::SURFACE.into()),
+            border: iced::Border {
+                color: theme::BORDER,
+                width: 0.0,
+                radius: 0.0.into(),
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
+fn subjects_toolbar(app: &App) -> Element<'_, Message> {
+    let title_row = row![
+        button(text(strings::BACK_TO_CALENDAR).size(13))
+            .padding([8, 11])
+            .style(theme::ghost_button)
+            .on_press(Message::ShowCalendar),
+        iced::widget::column![
+            text(strings::SUBJECTS)
+                .size(22)
+                .font(theme::bold())
+                .color(theme::TEXT),
+            text(format!("Всего: {}", app.subjects.len()))
+                .size(12)
+                .color(theme::MUTED),
+        ]
+        .spacing(2),
+        space::horizontal(),
+        text_input(strings::SEARCH_SUBJECTS, &app.subject_search)
+            .on_input(Message::SubjectSearch)
+            .padding([8, 10])
+            .size(13)
+            .width(Length::Fixed(240.0)),
+        button(text(strings::TEACHERS).size(13))
+            .padding([9, 14])
+            .style(theme::secondary_button)
+            .on_press(Message::ShowTeachers),
+        button(text(strings::ADD_SUBJECT).size(13))
+            .padding([9, 14])
+            .style(theme::primary_button)
+            .on_press(Message::OpenNewSubject),
     ]
     .align_y(Alignment::Center)
     .spacing(10);
