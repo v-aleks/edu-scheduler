@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-use crate::app::state::CalendarView;
+use crate::app::state::{CalendarView, TimeField};
 use crate::domain::model::{SlotId, SlotKind, SubjectId, TeacherId, Weekday};
 
 use super::state::TeacherFilter;
@@ -56,6 +56,10 @@ pub enum SlotFormMessage {
     Weekday(Weekday),
     Start(String),
     End(String),
+    ToggleTimePicker(TimeField),
+    SetHour(TimeField, u8),
+    SetMinute(TimeField, u8),
+    TimePickerDone,
     Title(String),
     Description(String),
     ToggleTeacher(TeacherId),

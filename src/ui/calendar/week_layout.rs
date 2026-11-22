@@ -144,31 +144,12 @@ pub fn y_for_minute(bounds: Rectangle, minute: u16, start_minute: u16, end_minut
     bounds.y + ratio.clamp(0.0, 1.0) * bounds.height
 }
 
-pub fn target_start_minute(
-    bounds: Rectangle,
-    pointer: Point,
-    grab_offset_y: f32,
-    duration: u16,
-    start_minute: u16,
-    end_minute: u16,
-) -> u16 {
-    let latest = 1439_u16
-        .saturating_sub(duration)
-        .min(end_minute.saturating_sub(duration))
-        .max(start_minute);
-    let earliest = start_minute.min(latest);
-    let desired_y = pointer.y - grab_offset_y;
+pub fn start_minute_from_delta(origin_start: u16, delta_y: f32, duration: u16) -> u16 {
+    let minutes = (delta_y * 60.0 / HOUR_HEIGHT / 15.0).round() as i32 * 15;
+    let latest = 1439_u16.saturating_sub(duration);
+    let start = i32::from(origin_start) + minutes;
 
-    if bounds.height <= 0.0 || end_minute <= start_minute {
-        return earliest;
-    }
-
-    let ratio = ((desired_y - bounds.y) / bounds.height).clamp(0.0, 1.0);
-    let minute = f32::from(end_minute - start_minute) * ratio;
-    let minute = start_minute.saturating_add(minute as u16);
-    let snapped = minute - minute % 15;
-
-    snapped.clamp(earliest, latest)
+    start.clamp(0, i32::from(latest)) as u16
 }
 
 #[cfg(test)]
@@ -234,18 +215,11 @@ mod tests {
     }
 
     #[test]
-    fn maps_drag_position_to_snapped_start() {
-        let bounds = Rectangle::new(Point::ORIGIN, Size::new(768.0, 900.0));
-
-        assert_eq!(
-            target_start_minute(bounds, Point::new(300.0, 430.0), 10.0, 90, 7 * 60, 22 * 60),
-            7 * 60 + 420
-        );
-
-        assert_eq!(
-            target_start_minute(bounds, Point::new(300.0, -100.0), 10.0, 90, 7 * 60, 22 * 60),
-            7 * 60
-        );
+    fn delta_drag_snaps_vertical_time_changes() {
+        assert_eq!(start_minute_from_delta(540, 0.0, 90), 540);
+        assert_eq!(start_minute_from_delta(540, 64.0, 90), 600);
+        assert_eq!(start_minute_from_delta(540, -32.0, 90), 510);
+        assert_eq!(start_minute_from_delta(540, 1000.0, 90), 1349);
     }
 
     #[test]

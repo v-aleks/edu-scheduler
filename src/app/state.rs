@@ -62,12 +62,19 @@ pub enum Modal {
     ConfirmDeleteSubject(ConfirmDeleteSubject),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeField {
+    Start,
+    End,
+}
+
 pub struct SlotEditor {
     pub id: Option<SlotId>,
     pub kind: SlotKind,
     pub weekday: Weekday,
     pub start: String,
     pub end: String,
+    pub active_time_picker: Option<TimeField>,
     pub title: String,
     pub description: String,
     pub selected_teachers: BTreeSet<TeacherId>,
@@ -186,6 +193,12 @@ impl App {
             Ok("subjects") => self.screen = Screen::Subjects,
             Ok("subject") => self.open_new_subject(),
             Ok("slot") => self.open_new_slot(None),
+            Ok("time-picker") => {
+                self.open_new_slot(None);
+                if let Some(Modal::Slot(editor)) = &mut self.modal {
+                    editor.active_time_picker = Some(TimeField::Start);
+                }
+            }
             Ok("teacher") => self.open_new_teacher(),
             Ok("edit-teacher") => {
                 if let Some(id) = self.teachers.first().map(|teacher| teacher.id) {
@@ -373,6 +386,7 @@ impl App {
             weekday,
             start: crate::domain::format_time(start_minute),
             end: crate::domain::format_time(end_minute),
+            active_time_picker: None,
             title: String::new(),
             description: String::new(),
             selected_teachers,
@@ -393,6 +407,7 @@ impl App {
             weekday: slot.weekday,
             start: crate::domain::format_time(slot.start_minute),
             end: crate::domain::format_time(slot.end_minute),
+            active_time_picker: None,
             title: slot.title.clone(),
             description: slot.description.clone(),
             selected_teachers: slot.teacher_ids.iter().copied().collect(),

@@ -3,10 +3,10 @@ use iced::widget::{
 };
 use iced::{Alignment, Border, Element, Fill, Length};
 
-use crate::app::{App, Message, SlotEditor, SlotFormMessage as FormMessage};
+use crate::app::{App, Message, SlotEditor, SlotFormMessage as FormMessage, TimeField};
 use crate::domain::date::format_duration;
 use crate::domain::model::{SlotKind, Weekday};
-use crate::domain::validation::parse_time;
+use crate::domain::validation::{format_time, parse_time};
 use crate::ui::{strings, theme};
 
 pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
@@ -47,17 +47,16 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
     .padding([8, 10])
     .text_size(13);
 
-    let start_input = text_input("09:00", &editor.start)
-        .on_input(|value| Message::SlotForm(FormMessage::Start(value)))
-        .padding([8, 10])
-        .size(13)
-        .width(Length::Fixed(110.0));
-
-    let end_input = text_input("10:30", &editor.end)
-        .on_input(|value| Message::SlotForm(FormMessage::End(value)))
-        .padding([8, 10])
-        .size(13)
-        .width(Length::Fixed(110.0));
+    let start_button = time_button(
+        &editor.start,
+        editor.active_time_picker == Some(TimeField::Start),
+        TimeField::Start,
+    );
+    let end_button = time_button(
+        &editor.end,
+        editor.active_time_picker == Some(TimeField::End),
+        TimeField::End,
+    );
 
     let duration = match (parse_time(&editor.start), parse_time(&editor.end)) {
         (Ok(start), Ok(end)) if end > start => {
@@ -65,14 +64,17 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
                 .size(11)
                 .color(theme::MUTED)
         }
-        _ => text("Введите время в формате ЧЧ:ММ")
+        (Ok(_), Ok(_)) => text("Конец должен быть позже начала")
+            .size(11)
+            .color(theme::DANGER),
+        _ => text("Выберите время начала и окончания")
             .size(11)
             .color(theme::MUTED),
     };
 
     let time_row = row![
-        field("Начало", start_input.into()),
-        field("Конец", end_input.into()),
+        field("Начало", start_button),
+        field("Конец", end_button),
         container(duration)
             .padding([22, 0])
             .width(Fill)
@@ -80,6 +82,14 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
     ]
     .spacing(12)
     .align_y(Alignment::Start);
+
+    let time_section: Element<'_, Message> = if let Some(time_field) = editor.active_time_picker {
+        iced::widget::column![time_row, time_picker(editor, time_field)]
+            .spacing(8)
+            .into()
+    } else {
+        time_row.into()
+    };
 
     let title_input = text_input("Например, математика", &editor.title)
         .on_input(|value| Message::SlotForm(FormMessage::Title(value)))
@@ -148,7 +158,7 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
     let mut content = iced::widget::column![
         section("Тип", kind.into()),
         section("День недели", weekday.into()),
-        section("Время", time_row.into()),
+        section("Время", time_section),
         section("Название", title_input.into()),
         section("Описание", description.into()),
         section("Преподаватели", teachers.into()),
@@ -178,7 +188,7 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
     container(
         iced::widget::column![
             header,
-            scrollable(content).height(Length::Fixed(510.0)),
+            scrollable(content).height(Length::Fixed(550.0)),
             footer,
         ]
         .spacing(14)
@@ -188,6 +198,113 @@ pub fn view<'a>(app: &'a App, editor: &'a SlotEditor) -> Element<'a, Message> {
     .padding(22)
     .style(theme::modal)
     .into()
+}
+
+fn time_button<'a>(value: &'a str, active: bool, field: TimeField) -> Element<'a, Message> {
+    button(
+        row![
+            text(value)
+                .size(15)
+                .font(theme::semibold())
+                .color(if active { theme::ACCENT } else { theme::TEXT }),
+            space::horizontal(),
+            text("▾").size(11).color(theme::MUTED),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .width(Length::Fixed(132.0))
+    .padding([8, 10])
+    .style(theme::secondary_button)
+    .on_press(Message::SlotForm(FormMessage::ToggleTimePicker(field)))
+    .into()
+}
+
+fn time_picker(editor: &SlotEditor, field: TimeField) -> Element<'_, Message> {
+    let (value, default, title) = match field {
+        TimeField::Start => (&editor.start, 9 * 60, "Время начала"),
+        TimeField::End => (&editor.end, 10 * 60 + 30, "Время окончания"),
+    };
+    let current = parse_time(value).unwrap_or(default);
+    let selected_hour = (current / 60) as u8;
+    let selected_minute = (current % 60) as u8;
+
+    let hours: Vec<u8> = (0..24).collect();
+    let mut minutes: Vec<u8> = (0..60).step_by(5).collect();
+
+    if !minutes.contains(&selected_minute) {
+        minutes.push(selected_minute);
+        minutes.sort_unstable();
+    }
+
+    let hour_message = move |hour: u8| Message::SlotForm(FormMessage::SetHour(field, hour));
+    let minute_message = move |minute: u8| Message::SlotForm(FormMessage::SetMinute(field, minute));
+
+    let content = iced::widget::column![
+        row![
+            text(title)
+                .size(11)
+                .font(theme::semibold())
+                .color(theme::MUTED),
+            space::horizontal(),
+            text(format_time(current))
+                .size(15)
+                .font(theme::bold())
+                .color(theme::ACCENT),
+            button(text("Готово").size(11))
+                .padding([4, 9])
+                .style(theme::ghost_button)
+                .on_press(Message::SlotForm(FormMessage::TimePickerDone)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+        text("Часы").size(10).color(theme::MUTED),
+        number_grid(&hours, selected_hour, 12, hour_message),
+        text("Минуты").size(10).color(theme::MUTED),
+        number_grid(&minutes, selected_minute, 12, minute_message),
+    ]
+    .spacing(6)
+    .width(Fill);
+
+    container(content)
+        .padding(12)
+        .width(Fill)
+        .style(theme::muted_box)
+        .into()
+}
+
+fn number_grid(
+    values: &[u8],
+    selected: u8,
+    columns: usize,
+    message: impl Fn(u8) -> Message + Copy + 'static,
+) -> Element<'static, Message> {
+    let mut grid = iced::widget::column![].spacing(4).width(Fill);
+
+    for chunk in values.chunks(columns) {
+        let mut grid_row = row![].spacing(4).width(Fill);
+
+        for value in chunk {
+            grid_row = grid_row.push(
+                button(text(format!("{value:02}")).size(11))
+                    .width(Fill)
+                    .padding([5, 0])
+                    .style(if *value == selected {
+                        theme::active_toggle
+                    } else {
+                        theme::inactive_toggle
+                    })
+                    .on_press(message(*value)),
+            );
+        }
+
+        for _ in chunk.len()..columns {
+            grid_row = grid_row.push(space().width(Fill));
+        }
+
+        grid = grid.push(grid_row);
+    }
+
+    grid.into()
 }
 
 fn footer(editor: &SlotEditor) -> Element<'_, Message> {

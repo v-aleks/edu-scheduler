@@ -8,7 +8,7 @@ use crate::domain::validation::{find_conflicts, validate_teacher_draft, validati
 
 use super::App;
 use super::message::{Message, SlotFormMessage, SubjectFormMessage, TeacherFormMessage};
-use super::state::{CalendarView, Modal, Screen};
+use super::state::{CalendarView, Modal, Screen, TimeField};
 
 impl App {
     pub fn subscription(&self) -> Subscription<Message> {
@@ -230,6 +230,22 @@ impl App {
             SlotFormMessage::End(value) => {
                 editor.end = value;
                 editor.error = None;
+            }
+            SlotFormMessage::ToggleTimePicker(field) => {
+                editor.active_time_picker = if editor.active_time_picker == Some(field) {
+                    None
+                } else {
+                    Some(field)
+                };
+            }
+            SlotFormMessage::SetHour(field, hour) => {
+                set_time_value(editor, field, Some(hour), None);
+            }
+            SlotFormMessage::SetMinute(field, minute) => {
+                set_time_value(editor, field, None, Some(minute));
+            }
+            SlotFormMessage::TimePickerDone => {
+                editor.active_time_picker = None;
             }
             SlotFormMessage::Title(value) => {
                 editor.title = value;
@@ -632,6 +648,27 @@ impl App {
     }
 }
 
+fn set_time_value(
+    editor: &mut super::state::SlotEditor,
+    field: TimeField,
+    hour: Option<u8>,
+    minute: Option<u8>,
+) {
+    let (value, default) = match field {
+        TimeField::Start => (&mut editor.start, 9 * 60),
+        TimeField::End => (&mut editor.end, 10 * 60 + 30),
+    };
+
+    let current = crate::domain::validation::parse_time(value).unwrap_or(default);
+    let current_hour = (current / 60) as u8;
+    let current_minute = (current % 60) as u8;
+    let minutes =
+        u16::from(hour.unwrap_or(current_hour)) * 60 + u16::from(minute.unwrap_or(current_minute));
+
+    *value = crate::domain::format_time(minutes);
+    editor.error = None;
+}
+
 fn is_command(modifiers: &Modifiers) -> bool {
     modifiers.command() || modifiers.control()
 }
@@ -813,6 +850,37 @@ mod tests {
         assert_eq!(app.slots[0].weekday, Weekday::Tuesday);
         assert_eq!(app.slots[0].start_minute, 600);
         assert_eq!(app.slots[0].teacher_ids, vec![teacher_id]);
+    }
+
+    #[test]
+    fn time_picker_updates_start_and_end() {
+        let mut app = app();
+        app.update(Message::OpenNewSlot);
+        app.update(Message::SlotForm(SlotFormMessage::ToggleTimePicker(
+            TimeField::Start,
+        )));
+        app.update(Message::SlotForm(SlotFormMessage::SetHour(
+            TimeField::Start,
+            10,
+        )));
+        app.update(Message::SlotForm(SlotFormMessage::SetMinute(
+            TimeField::Start,
+            15,
+        )));
+        app.update(Message::SlotForm(SlotFormMessage::SetHour(
+            TimeField::End,
+            12,
+        )));
+        app.update(Message::SlotForm(SlotFormMessage::SetMinute(
+            TimeField::End,
+            45,
+        )));
+        app.update(Message::SlotForm(SlotFormMessage::TimePickerDone));
+        app.update(Message::SlotForm(SlotFormMessage::Save));
+
+        assert_eq!(app.slots.len(), 1);
+        assert_eq!(app.slots[0].start_minute, 10 * 60 + 15);
+        assert_eq!(app.slots[0].end_minute, 12 * 60 + 45);
     }
 
     #[test]
