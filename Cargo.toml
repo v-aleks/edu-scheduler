@@ -1,0 +1,25 @@
+[package]
+name = "edu-scheduler"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Offline-first desktop schedule manager for teachers"
+license = "MIT"
+repository = "https://github.com/v-aleks/edu-scheduler"
+readme = "README.md"
+
+[dependencies]
+chrono = "0.4"
+directories = "6"
+iced = { version = "0.14", features = ["canvas", "smol"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Edu Scheduler
+Name[ru]=Расписание преподавателей
+Comment=Offline-first расписание преподавателей
+Comment[ru]=Локальное расписание преподавателей
+Exec=edu-scheduler
+Icon=edu-scheduler
+Terminal=false
+Categories=Education;Office;
+Keywords=schedule;teachers;расписание;преподаватели;
+StartupWMClass=edu-scheduler
